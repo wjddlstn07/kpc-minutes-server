@@ -280,6 +280,34 @@ function parseInlineBold(text) {
   });
 }
 
+// ─────────────────────────────────────────
+// RSS XML 프록시 엔드포인트 (CORS 우회용)
+// POST /fetch-rss
+// Body: { url: string }
+// 응답: { xml: string }
+// ─────────────────────────────────────────
+app.post('/fetch-rss', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'url 필드 필요' });
+
+  try {
+    const response = await axios.get(url, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; RSS-Reader/1.0)',
+        'Accept': 'application/rss+xml, application/xml, text/xml, */*',
+      },
+      maxRedirects: 5,
+      responseType: 'text',
+    });
+
+    res.json({ xml: response.data });
+  } catch (err) {
+    console.error(`fetch-rss 실패 [${url}]:`, err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`서버 실행 중: http://localhost:${PORT}`);
