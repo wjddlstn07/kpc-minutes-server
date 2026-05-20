@@ -10,6 +10,17 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 
 // ─────────────────────────────────────────
+// CORS — 브라우저에서의 직접 호출 허용
+// ─────────────────────────────────────────
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
+// ─────────────────────────────────────────
 // 헬스체크 (Render가 서버 상태 확인용으로 사용)
 // ─────────────────────────────────────────
 app.get('/', (req, res) => {
