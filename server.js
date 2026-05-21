@@ -28,6 +28,81 @@ app.get('/', (req, res) => {
 });
 
 // ─────────────────────────────────────────
+// 기사 본문 크롤링 헬퍼
+// ─────────────────────────────────────────
+
+const UA_GOOGLEBOT = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+const UA_CHROME    = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+/**
+ * HTML에서 본문 텍스트 추출 (cheerio)
+ */
+function extractBodyText(html) {
+  const $ = cheerio.load(html);
+
+  $('script, style, nav, header, footer, aside, .ad, .ads, .advertisement, .cookie, .popup, .modal, .sidebar, .related, .comment, .share, noscript, iframe').remove();
+
+  const selectors = [
+    'article',
+    '[role="main"]',
+    'main',
+    '.article-body',
+    '.article-content',
+    '.post-body',
+    '.post-content',
+    '.entry-content',
+    '.content-body',
+    '.story-body',
+    '#article-body',
+    '#content',
+    '.content',
+  ];
+
+  let text = '';
+  for (const sel of selectors) {
+    const el = $(sel).first();
+    if (el.length) {
+      text = el.text();
+      break;
+    }
+  }
+
+  if (!text.trim()) text = $('body').text();
+
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 10000);
+}
+
+/**
+ * 단일 UA로 URL fetch → 본문 텍스트 반환
+ * 실패 또는 200자 미만이면 null 반환
+ */
+async function fetchWithUA(url, userAgent) {
+  const response = await axios.get(url, {
+    timeout: 10000,
+    headers: {
+      'User-Agent': userAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'ko-KR,ko;q=0.9,en-US,en;q=0.8',
+    },
+    maxRedirects: 5,
+  });
+  const text = extractBodyText(response.data);
+  return text.length >= 200 ? text : null;
+}
+
+/**
+ * ko-KR 로케일 경로를 제거해 영문 URL로 변환
+ * openai.com/ko-KR/blog/x → openai.com/blog/x
+ */
+function toEnglishUrl(url) {
+  return url.replace(/\/(ko[-_]KR|ko[-_]kr|ko)\//i, '/');
+}
+
+// ─────────────────────────────────────────
 // 기사 본문 크롤링 엔드포인트
 // POST /fetch-article
 // Body: { url: string }
@@ -37,66 +112,50 @@ app.post('/fetch-article', async (req, res) => {
   const { url } = req.body;
   if (!url) return res.status(400).json({ text: '' });
 
+  // ── 1차: Googlebot UA ────────────────────
   try {
-    const response = await axios.get(url, {
-      timeout: 8000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
-      },
-      maxRedirects: 5,
-    });
-    console.log(`fetch-article 성공 [${url}] status=${response.status}`);
-
-    const $ = cheerio.load(response.data);
-
-    // 노이즈 제거
-    $('script, style, nav, header, footer, aside, .ad, .ads, .advertisement, .cookie, .popup, .modal, .sidebar, .related, .comment, .share, noscript, iframe').remove();
-
-    // 본문 추출 (우선순위 순)
-    const selectors = [
-      'article',
-      '[role="main"]',
-      'main',
-      '.article-body',
-      '.article-content',
-      '.post-body',
-      '.post-content',
-      '.entry-content',
-      '.content-body',
-      '.story-body',
-      '#article-body',
-      '#content',
-      '.content',
-    ];
-
-    let text = '';
-    for (const sel of selectors) {
-      const el = $(sel).first();
-      if (el.length) {
-        text = el.text();
-        break;
-      }
+    const text = await fetchWithUA(url, UA_GOOGLEBOT);
+    if (text) {
+      console.log(`fetch-article [1차 Googlebot 성공] len=${text.length} url=${url}`);
+      return res.json({ text });
     }
-
-    // fallback: body 전체
-    if (!text.trim()) {
-      text = $('body').text();
-    }
-
-    // 공백 정리 및 10000자 truncate
-    text = text
-      .replace(/\s+/g, ' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-      .slice(0, 10000);
-
-    res.json({ text });
-  } catch (err) {
-    console.error(`fetch-article 실패 [${url}]:`, err.message);
-    res.json({ text: '' }); // 실패해도 에러 throw 안 함
+    console.log(`fetch-article [1차 Googlebot 짧음(${(await fetchWithUA(url, UA_GOOGLEBOT))?.length ?? 0}자)] → 2차 Chrome 시도`);
+  } catch (e) {
+    console.warn(`fetch-article [1차 Googlebot 실패: ${e.message}] → 2차 Chrome 시도`);
   }
+
+  // ── 2차: Chrome UA ───────────────────────
+  try {
+    const text = await fetchWithUA(url, UA_CHROME);
+    if (text) {
+      console.log(`fetch-article [2차 Chrome 성공] len=${text.length} url=${url}`);
+      return res.json({ text });
+    }
+    console.log(`fetch-article [2차 Chrome 짧음] → 3차 영문 URL 시도`);
+  } catch (e) {
+    console.warn(`fetch-article [2차 Chrome 실패: ${e.message}] → 3차 영문 URL 시도`);
+  }
+
+  // ── 3차: ko-KR → 영문 URL 변환 후 재시도 ──
+  const englishUrl = toEnglishUrl(url);
+  if (englishUrl !== url) {
+    console.log(`fetch-article [3차 영문 URL 변환] ${url} → ${englishUrl}`);
+    try {
+      const text = await fetchWithUA(englishUrl, UA_CHROME);
+      if (text) {
+        console.log(`fetch-article [3차 영문 URL 성공] len=${text.length}`);
+        return res.json({ text });
+      }
+      console.warn(`fetch-article [3차 영문 URL도 짧음] → 빈 응답`);
+    } catch (e) {
+      console.warn(`fetch-article [3차 영문 URL 실패: ${e.message}] → 빈 응답`);
+    }
+  } else {
+    console.warn(`fetch-article [ko-KR URL 아님, 3차 스킵] url=${url}`);
+  }
+
+  // 모든 시도 실패
+  res.json({ text: '' });
 });
 
 // ─────────────────────────────────────────
