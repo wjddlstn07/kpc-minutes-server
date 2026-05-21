@@ -85,12 +85,12 @@ app.post('/fetch-article', async (req, res) => {
       text = $('body').text();
     }
 
-    // 공백 정리 및 6000자 truncate
+    // 공백 정리 및 10000자 truncate
     text = text
       .replace(/\s+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim()
-      .slice(0, 6000);
+      .slice(0, 10000);
 
     res.json({ text });
   } catch (err) {
