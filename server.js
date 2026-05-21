@@ -41,12 +41,13 @@ app.post('/fetch-article', async (req, res) => {
     const response = await axios.get(url, {
       timeout: 8000,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8',
       },
       maxRedirects: 5,
     });
+    console.log(`fetch-article 성공 [${url}] status=${response.status}`);
 
     const $ = cheerio.load(response.data);
 
@@ -84,12 +85,12 @@ app.post('/fetch-article', async (req, res) => {
       text = $('body').text();
     }
 
-    // 공백 정리 및 3000자 truncate
+    // 공백 정리 및 6000자 truncate
     text = text
       .replace(/\s+/g, ' ')
       .replace(/\n{3,}/g, '\n\n')
       .trim()
-      .slice(0, 3000);
+      .slice(0, 6000);
 
     res.json({ text });
   } catch (err) {
