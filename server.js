@@ -36,10 +36,74 @@ const UA_CHROME    = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.
 
 /**
  * HTML에서 본문 텍스트 추출 (cheerio)
+ * url을 받아 도메인별 특화 추출 로직 적용
  */
-function extractBodyText(html) {
+function extractBodyText(html, url = '') {
   const $ = cheerio.load(html);
+  const isAnthropic = url.includes('anthropic.com');
 
+  if (isAnthropic) {
+    // ── Anthropic 전용: 노이즈 섹션 먼저 제거 ──────────────────────
+    $('script, style, nav, header, noscript, iframe').remove();
+
+    // 클래스명 기반 노이즈 제거
+    $('[class*="related"], [class*="recommended"], [class*="read-more"], [class*="ReadMore"]').remove();
+    $('[class*="sidebar"], [class*="Sidebar"]').remove();
+    $('aside, footer').remove();
+
+    // "Related", "What's next", "Read more" 제목을 가진 섹션 제거
+    $('section, div, aside').each((_, el) => {
+      const headingText = $(el).find('h2, h3, h4').first().text().toLowerCase().trim();
+      if (
+        headingText.includes('related') ||
+        headingText.includes("what's next") ||
+        headingText.includes('read more') ||
+        headingText.includes('further reading') ||
+        headingText.includes('more from') ||
+        headingText.includes('you might also')
+      ) {
+        $(el).remove();
+      }
+    });
+
+    // Anthropic 본문 선택자 우선순위 순서대로 시도
+    const anthropicSelectors = [
+      'article',
+      'main article',
+      '.PostBody',
+      '[class*="post-body"]',
+      '[class*="article-body"]',
+      '[class*="PostBody"]',
+      '[class*="ArticleBody"]',
+      'main',
+    ];
+
+    for (const sel of anthropicSelectors) {
+      const el = $(sel).first();
+      if (el.length) {
+        const text = el.text()
+          .replace(/\s+/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim()
+          .slice(0, 10000);
+        if (text.length >= 200) {
+          console.log(`[Anthropic 추출] 선택자: ${sel}, 길이: ${text.length}`);
+          return text;
+        }
+      }
+    }
+
+    // Anthropic 선택자 모두 실패 시 body 전체에서 추출
+    console.warn('[Anthropic 추출] 전용 선택자 실패 → body fallback');
+    const bodyText = $('body').text()
+      .replace(/\s+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, 10000);
+    return bodyText;
+  }
+
+  // ── 일반 도메인: 기존 로직 ────────────────────────────────────────
   $('script, style, nav, header, footer, aside, .ad, .ads, .advertisement, .cookie, .popup, .modal, .sidebar, .related, .comment, .share, noscript, iframe').remove();
 
   const selectors = [
@@ -90,7 +154,7 @@ async function fetchWithUA(url, userAgent) {
     },
     maxRedirects: 5,
   });
-  const text = extractBodyText(response.data);
+  const text = extractBodyText(response.data, url);  // url 전달
   return text.length >= 200 ? text : null;
 }
 
